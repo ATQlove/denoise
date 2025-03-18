@@ -7,13 +7,20 @@ import numpy as np
 import torch  # 用于将 numpy 转为 torch Tensor
 import matplotlib.pyplot as plt
 
+from filters.wavlet_filter import apgd, bsplinelinear
 from filters.quadratic_filter import quadratic_filter
 from filters.TV_filter import TV_filter
 from filters.TV_filter_pd import TV_filter_pd
-from filters.tikhonov_filter import tikhonov        # <-- 新增：引入 Tikhonov
+from filters.tikhonov_filter import tikhonov
 from filters.non_local_means_filter import non_local_means_filter
 from filters.non_local_wnnm_filter import non_local_wnnm_filter
-from utilities.utils import read_image, add_gaussian_noise, add_poisson_noise, PSNR, create_results_directory, normalize_image
+
+# 引入你已有的工具函数
+from utilities.utils import (
+    read_image, add_gaussian_noise, add_poisson_noise,
+    PSNR, create_results_directory, normalize_image
+)
+
 
 
 def main(noise_type='gaussian', plot=False, savefigs=True):
@@ -29,8 +36,12 @@ def main(noise_type='gaussian', plot=False, savefigs=True):
     np.random.seed(0)
 
     # 在此处添加 'tik' 用于记录 Tikhonov 的结果
-    PSNR_results = {'quad': {}, 'TV': {}, 'tik': {}, 'nlm': {}, 'wnnm': {}}
-    time_results = {'quad': {}, 'TV': {}, 'tik': {}, 'nlm': {}, 'wnnm': {}}
+    PSNR_results = {
+        'quad': {}, 'TV': {}, 'tik': {}, 'nlm': {}, 'wnnm': {}, 'wavelet': {}
+    }
+    time_results = {
+        'quad': {}, 'TV': {}, 'tik': {}, 'nlm': {}, 'wnnm': {}, 'wavelet': {}
+    }
 
     # images = ['clock', 'boat', 'aerial', 'bridge', 'couple']
 
@@ -69,57 +80,83 @@ def main(noise_type='gaussian', plot=False, savefigs=True):
 
             start_time = time.time()
 
-            # ============= Quadratic Filter =============
-            quad_im = quadratic_filter(noisy_im, 5)
-            quad_time = time.time()
-            quad_im = normalize_image(quad_im)
+            # # ============= Quadratic Filter =============
+            # quad_im = quadratic_filter(noisy_im, 5)
+            # quad_time = time.time()
+            # quad_im = normalize_image(quad_im)
 
-            # ============= TV Filter (可切换不同实现) =============
-            # TV_im = TV_filter(noisy_im, 0.3)
-            TV_im = TV_filter_pd(noisy_im, 6)
-            TV_time = time.time()
-            TV_im = normalize_image(TV_im)
+            # # ============= TV Filter (可切换不同实现) =============
+            # # TV_im = TV_filter(noisy_im, 0.3)
+            # TV_im = TV_filter_pd(noisy_im, 6)
+            # TV_time = time.time()
+            # TV_im = normalize_image(TV_im)
 
-            # ============= Tikhonov Filter =============
-            tik_start = time.time()
-            # 将 numpy 转为 torch，再调用 tikhonov
-            tik_tensor = tikhonov(torch.from_numpy(noisy_im))
-            # 返回值是 torch.Tensor，需要转回 numpy
-            tik_im = tik_tensor.detach().cpu().numpy()
-            tik_im = normalize_image(tik_im)
-            tik_end = time.time()
+            # # ============= Tikhonov Filter =============
+            # tik_start = time.time()
+            # # 将 numpy 转为 torch，再调用 tikhonov
+            # tik_tensor = tikhonov(torch.from_numpy(noisy_im))
+            # # 返回值是 torch.Tensor，需要转回 numpy
+            # tik_im = tik_tensor.detach().cpu().numpy()
+            # tik_im = normalize_image(tik_im)
+            # tik_end = time.time()
 
-            # ============= Non-local Means =============
-            nlm_im = non_local_means_filter(noisy_im, 7, 10, 0.1)
-            nlm_time = time.time()
-            nlm_im = normalize_image(nlm_im)
+            # # ============= Non-local Means =============
+            # nlm_im = non_local_means_filter(noisy_im, 7, 10, 0.1)
+            # nlm_time = time.time()
+            # nlm_im = normalize_image(nlm_im)
 
-            # ============= Weighted Nuclear Norm Minimization =============
-            x = noisy_im
-            y = noisy_im
-            delta = 0.3
-            for _ in range(1):
-                y = x + delta*(noisy_im - y)
-                x = non_local_wnnm_filter(y, 7, 10, variance)
-                x = normalize_image(x)
+            # # ============= Weighted Nuclear Norm Minimization =============
+            # x = noisy_im
+            # y = noisy_im
+            # delta = 0.3
+            # for _ in range(1):
+            #     y = x + delta*(noisy_im - y)
+            #     x = non_local_wnnm_filter(y, 7, 10, variance)
+            #     x = normalize_image(x)
 
-            wnnm_im = x
+            # wnnm_im = x
 
-            wnnm_time = time.time()
+            # wnnm_time = time.time()
+
+            # ============= Wavelet Denoising (APGD) =============
+            wav_start = time.time()
+            
+            # 1. 构造掩码 A：对于普通全图去噪，A 就是一张跟图像同大小、全为 1 的矩阵
+            A = np.ones_like(noisy_im)
+
+            # 2. 调用 apgd 进行小波去噪
+            #   - thresh=[0.1, 0.07, 0.04, 0.01] 是一个多层小波的阈值示例，可酌情更改
+            #   - levels=4 表示分解 4 层
+            #   - iters=20 迭代次数
+            wav_im = apgd(
+                f=noisy_im,
+                A=A,
+                thresh=[0.1, 0.07, 0.04, 0.01],
+                masks=bsplinelinear,  # 使用线性 B 样条，可选 haar, db2, db3, etc.
+                levels=4,
+                iters=20,
+                verbose=False,   # 如果想观察迭代进度，可改 True
+                showiters=False  # 如果想在迭代中实时展示图像，可改 True
+            )
+            
+            wav_im = normalize_image(wav_im)
+            wav_end = time.time()
 
             # ============= 计算 PSNR =============
-            PSNR_results['quad'][im_name].append(PSNR(original_im=im, cleaned_im=quad_im))
-            PSNR_results['TV'][im_name].append(PSNR(original_im=im, cleaned_im=TV_im))
-            PSNR_results['tik'][im_name].append(PSNR(original_im=im, cleaned_im=tik_im))  # <-- Tikhonov
-            PSNR_results['nlm'][im_name].append(PSNR(original_im=im, cleaned_im=nlm_im))
-            PSNR_results['wnnm'][im_name].append(PSNR(original_im=im, cleaned_im=wnnm_im))
+            # PSNR_results['quad'][im_name].append(PSNR(original_im=im, cleaned_im=quad_im))
+            # PSNR_results['TV'][im_name].append(PSNR(original_im=im, cleaned_im=TV_im))
+            # PSNR_results['tik'][im_name].append(PSNR(original_im=im, cleaned_im=tik_im))  # <-- Tikhonov
+            # PSNR_results['nlm'][im_name].append(PSNR(original_im=im, cleaned_im=nlm_im))
+            # PSNR_results['wnnm'][im_name].append(PSNR(original_im=im, cleaned_im=wnnm_im))
+            PSNR_results['wavelet'][im_name].append(PSNR(original_im=im, cleaned_im=wav_im))  # <-- 新增 Wavelet
 
             # ============= 计算耗时 =============
-            time_results['quad'][im_name].append(quad_time - start_time)
-            time_results['TV'][im_name].append(TV_time - quad_time)
-            time_results['tik'][im_name].append(tik_end - tik_start)  # <-- Tikhonov
-            time_results['nlm'][im_name].append(nlm_time - TV_time)
-            time_results['wnnm'][im_name].append(wnnm_time - nlm_time)
+            # time_results['quad'][im_name].append(quad_time - start_time)
+            # time_results['TV'][im_name].append(TV_time - quad_time)
+            # time_results['tik'][im_name].append(tik_end - tik_start)  # <-- Tikhonov
+            # time_results['nlm'][im_name].append(nlm_time - TV_time)
+            # time_results['wnnm'][im_name].append(wnnm_time - nlm_time)
+            time_results['wavelet'][im_name].append(wav_end - wav_start)  # <-- 新增 Wavelet
 
             # ============= 绘图 & 保存 =============
             if plot is True or savefigs is True:
@@ -131,34 +168,40 @@ def main(noise_type='gaussian', plot=False, savefigs=True):
                 ax_noisy.imshow(noisy_im, cmap='gray')
                 ax_noisy.set_title(f'Noisy Image, PSNR={round(PSNR(original_im=im, cleaned_im=noisy_im), 2)}')
 
-                fig_quad, ax_quad = plt.subplots()
-                ax_quad.imshow(quad_im, cmap='gray')
-                ax_quad.set_title(f'Quadratic Image, PSNR={round(PSNR(original_im=im, cleaned_im=quad_im), 2)}')
+                # fig_quad, ax_quad = plt.subplots()
+                # ax_quad.imshow(quad_im, cmap='gray')
+                # ax_quad.set_title(f'Quadratic Image, PSNR={round(PSNR(original_im=im, cleaned_im=quad_im), 2)}')
 
-                fig_tv, ax_tv = plt.subplots()
-                ax_tv.imshow(TV_im, cmap='gray')
-                ax_tv.set_title(f'TV Image, PSNR={round(PSNR(original_im=im, cleaned_im=TV_im), 2)}')
+                # fig_tv, ax_tv = plt.subplots()
+                # ax_tv.imshow(TV_im, cmap='gray')
+                # ax_tv.set_title(f'TV Image, PSNR={round(PSNR(original_im=im, cleaned_im=TV_im), 2)}')
 
-                # 新增：Tikhonov
-                fig_tik, ax_tik = plt.subplots()
-                ax_tik.imshow(tik_im, cmap='gray')
-                ax_tik.set_title(f'Tikhonov Image, PSNR={round(PSNR(original_im=im, cleaned_im=tik_im), 2)}')
+                # # 新增：Tikhonov
+                # fig_tik, ax_tik = plt.subplots()
+                # ax_tik.imshow(tik_im, cmap='gray')
+                # ax_tik.set_title(f'Tikhonov Image, PSNR={round(PSNR(original_im=im, cleaned_im=tik_im), 2)}')
 
-                fig_nlm, ax_nlm = plt.subplots()
-                ax_nlm.imshow(nlm_im, cmap='gray')
-                ax_nlm.set_title(f'Non-local means Image, PSNR={round(PSNR(original_im=im, cleaned_im=nlm_im), 2)}')
+                # fig_nlm, ax_nlm = plt.subplots()
+                # ax_nlm.imshow(nlm_im, cmap='gray')
+                # ax_nlm.set_title(f'Non-local means Image, PSNR={round(PSNR(original_im=im, cleaned_im=nlm_im), 2)}')
 
-                fig_wnnm, ax_wnnm = plt.subplots()
-                ax_wnnm.imshow(wnnm_im, cmap='gray')
-                ax_wnnm.set_title(f'Weighted Nuclear Norm Minimization Image, PSNR={round(PSNR(original_im=im, cleaned_im=wnnm_im), 2)}')
+                # fig_wnnm, ax_wnnm = plt.subplots()
+                # ax_wnnm.imshow(wnnm_im, cmap='gray')
+                # ax_wnnm.set_title(f'Weighted Nuclear Norm Minimization Image, PSNR={round(PSNR(original_im=im, cleaned_im=wnnm_im), 2)}')
+
+                fig_wav, ax_wav = plt.subplots()
+                ax_wav.imshow(wav_im, cmap='gray')
+                ax_wav.set_title(f'Wavelet Image, PSNR={round(PSNR(original_im=im, cleaned_im=wav_im), 2)}')
+
 
                 if savefigs is True:
                     fig_noisy.savefig(f'./results/{noise_type}/{im_name}/var_{str_var}/noisy.png')
-                    fig_quad.savefig(f'./results/{noise_type}/{im_name}/var_{str_var}/quad.png')
-                    fig_tv.savefig(f'./results/{noise_type}/{im_name}/var_{str_var}/tv.png')
-                    fig_tik.savefig(f'./results/{noise_type}/{im_name}/var_{str_var}/tik.png')    # <-- Tikhonov
-                    fig_nlm.savefig(f'./results/{noise_type}/{im_name}/var_{str_var}/nlm.png')
-                    fig_wnnm.savefig(f'./results/{noise_type}/{im_name}/var_{str_var}/wnnm.png')
+                    # fig_quad.savefig(f'./results/{noise_type}/{im_name}/var_{str_var}/quad.png')
+                    # fig_tv.savefig(f'./results/{noise_type}/{im_name}/var_{str_var}/tv.png')
+                    # fig_tik.savefig(f'./results/{noise_type}/{im_name}/var_{str_var}/tik.png')    # <-- Tikhonov
+                    # fig_nlm.savefig(f'./results/{noise_type}/{im_name}/var_{str_var}/nlm.png')
+                    # fig_wnnm.savefig(f'./results/{noise_type}/{im_name}/var_{str_var}/wnnm.png')
+                    fig_wav.savefig(f'./results/{noise_type}/{im_name}/var_{str_var}/wavelet.png')
 
                 if plot is True:
                     plt.show()
