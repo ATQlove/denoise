@@ -40,7 +40,7 @@ def main(noise_type='gaussian', plot=False, savefigs=True):
         'quad': {}, 'TV': {}, 'tik': {}, 'nlm': {}, 'wnnm': {}, 'wavelet': {}
     }
 
-    images = ['clock', 'boat', 'aerial', 'bridge', 'couple']
+    images = ['landscape_gray', 'peacock_gray', 'spray_gray']
 
     if noise_type == 'gaussian':
         hyperparameters = [0.01, 0.025, 0.05]
